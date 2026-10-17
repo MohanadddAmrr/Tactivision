@@ -1,0 +1,18 @@
+# ============================================================================
+# TactiVision Pro — Streamlit Cloud Showcase Dependencies
+# ============================================================================
+#
+# This is a LIGHTWEIGHT dependency set for the public showcase at streamlit_app.py.
+# It intentionally EXCLUDES ultralytics, torch, tensorflow, opencv-contrib,
+# easyocr, and other heavy ML packages — those are only needed to run the
+# full pipeline locally (see requirements.txt).
+#
+# When deploying on Streamlit Community Cloud, point the "requirements file"
+# setting at this file (requirements_streamlit.txt), NOT the main requirements.txt.
+# ============================================================================
+
+streamlit>=1.32.0,<2.0.0
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<3.0.0
+plotly>=5.18.0,<6.0.0
+Pillow>=10.0.0,<12.0.0
