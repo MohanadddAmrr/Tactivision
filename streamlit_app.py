@@ -1,19 +1,16 @@
 """
-TactiVision Pro — Live Showcase (Streamlit Cloud)
-==================================================
+TactiVision Pro — Public Showcase (Streamlit Cloud)
+====================================================
 
-A lightweight, read-only dashboard that showcases the output of the TactiVision Pro
-football analytics pipeline using pre-computed match data.
+A read-only visualisation of pre-computed TactiVision pipeline output. Designed
+to let reviewers and recruiters explore the project without a local setup.
 
-This is NOT the full pipeline (which requires GPU + heavy ML dependencies and runs
-locally). This showcase visualises real pre-computed results from the Arsenal match
-analysis so recruiters and reviewers can explore the project without a local setup.
-
-The full source code and heavy pipeline live at the TactiVision repository root.
-Run the full dashboard locally with:  streamlit run demo/dashboard_final.py
+The full pipeline (detection, tracking, feature extraction) requires GPU +
+heavy ML dependencies and runs locally. This showcase serves the real JSON
+output and heatmap PNGs the pipeline wrote after analysing broadcast footage.
 
 Author:  Mohanad Amr
-License: MIT
+Project: TactiVision Pro — graduation project, Misr International University, 2026
 """
 
 from __future__ import annotations
@@ -22,18 +19,19 @@ import json
 from pathlib import Path
 from typing import Any
 
+import math
+import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
-from PIL import Image
 
 # ---------------------------------------------------------------------------
-# Page config MUST be first Streamlit call
+# Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="TactiVision Pro — Football Analytics Showcase",
-    page_icon="⚽",
+    page_title="TactiVision Pro",
+    page_icon=None,
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
@@ -41,133 +39,205 @@ st.set_page_config(
         "Report a bug": "https://github.com/MohanadddAmrr/TactiVision/issues",
         "About": (
             "TactiVision Pro — End-to-end computer vision pipeline for football "
-            "analytics. Built as a graduation project by Mohanad Amr (team lead, "
-            "6 members) at Misr International University."
+            "analytics. Graduation project, Misr International University, 2026."
         ),
     },
 )
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths & constants
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).parent
 DEMO_OUTPUTS = REPO_ROOT / "demo" / "demo_outputs"
 GITHUB_URL = "https://github.com/MohanadddAmrr/TactiVision"
 LINKEDIN_URL = "https://www.linkedin.com/in/mohanad-amr-5a50952ab/"
 
+# Match-eligibility rules: only matches that have real pipeline output are shown
+MIN_PLAYERS = 15
+MIN_FRAMES = 1500
+REQUIRE_POSSESSION = True
+
 # ---------------------------------------------------------------------------
-# Styling
+# Design system (serious, data-forward, no decoration)
 # ---------------------------------------------------------------------------
-CUSTOM_CSS = """
+# Core palette: deep navy base, slate panels, cool blue accents.
+BG = "#0a0e1a"           # Page background
+SURFACE = "#131b2b"      # Card background
+SURFACE_2 = "#1a2436"    # Hover / nested surface
+BORDER = "#223049"       # Hairline borders
+TEXT = "#e8ecf1"         # Primary text
+TEXT_MUTED = "#8a97ad"   # Secondary text
+TEXT_DIM = "#5c6a82"     # Labels
+ACCENT = "#4b7bec"       # Primary accent (links, highlights)
+ACCENT_SOFT = "#2d4878"  # Accent muted
+
+# Semantic data colours (used only in visualisations, never as decoration)
+TEAM_A = "#e74c3c"   # Home team (Arsenal in the sample match)
+TEAM_B = "#3498db"   # Away team
+REF = "#95a5a6"      # Referees
+POSITIVE = "#2ecc71"
+NEUTRAL = "#8395a7"
+
+CUSTOM_CSS = f"""
 <style>
-    .main > div { padding-top: 1rem; }
-    .block-container { padding-top: 1.5rem; padding-bottom: 3rem; max-width: 1300px; }
+    /* Reset Streamlit defaults */
+    .main > div {{ padding-top: 0.5rem; }}
+    .block-container {{
+        padding-top: 1.5rem;
+        padding-bottom: 3rem;
+        max-width: 1280px;
+    }}
 
-    /* Hero banner */
-    .hero {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%);
-        border: 1px solid #1e293b;
-        border-radius: 14px;
-        padding: 2rem 2rem 1.5rem 2rem;
-        margin-bottom: 1.5rem;
-    }
-    .hero h1 {
-        font-size: 2.4rem;
-        margin: 0 0 .4rem 0;
-        background: linear-gradient(90deg, #f1f5f9 0%, #94a3b8 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-    }
-    .hero .tag { color: #64748b; font-size: .95rem; margin: 0; }
+    /* Serious typography */
+    html, body, [class*="css"] {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter",
+                     "Helvetica Neue", Arial, sans-serif;
+        letter-spacing: -0.005em;
+    }}
 
-    /* KPI tile */
-    .kpi {
-        background: #0f172a;
-        border: 1px solid #1e293b;
-        border-radius: 10px;
-        padding: 1rem 1.25rem;
-        height: 100%;
-    }
-    .kpi .label {
-        color: #64748b;
-        font-size: .75rem;
-        letter-spacing: .08em;
+    h1, h2, h3, h4 {{
+        color: {TEXT};
+        font-weight: 600;
+        letter-spacing: -0.015em;
+    }}
+
+    h2 {{ font-size: 1.5rem; margin-top: 0.5rem; margin-bottom: 1rem; }}
+    h3 {{ font-size: 1.1rem; margin-top: 1rem; margin-bottom: 0.6rem; color: {TEXT_MUTED}; }}
+
+    /* Hero banner — flat, no gradient */
+    .hero {{
+        background: {SURFACE};
+        border: 1px solid {BORDER};
+        border-left: 3px solid {ACCENT};
+        padding: 1.6rem 1.8rem;
+        margin-bottom: 1.75rem;
+    }}
+    .hero .wordmark {{
+        color: {TEXT};
+        font-size: 1.5rem;
+        font-weight: 600;
+        margin: 0;
+        letter-spacing: -0.02em;
+    }}
+    .hero .subtitle {{
+        color: {TEXT_MUTED};
+        font-size: 0.95rem;
+        margin: 0.3rem 0 0 0;
+        line-height: 1.5;
+    }}
+    .hero .meta {{
+        margin-top: 1rem;
+        color: {TEXT_DIM};
+        font-size: 0.78rem;
+        letter-spacing: 0.06em;
         text-transform: uppercase;
-        margin-bottom: .3rem;
-    }
-    .kpi .value {
-        color: #f1f5f9;
-        font-size: 1.8rem;
+    }}
+    .hero .meta span {{ margin-right: 1.5rem; }}
+
+    /* KPI tile — clinical */
+    .kpi {{
+        background: {SURFACE};
+        border: 1px solid {BORDER};
+        padding: 1.1rem 1.25rem;
+        height: 100%;
+    }}
+    .kpi .label {{
+        color: {TEXT_DIM};
+        font-size: 0.7rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+    }}
+    .kpi .value {{
+        color: {TEXT};
+        font-size: 1.85rem;
         font-weight: 600;
         line-height: 1.1;
-    }
-    .kpi .sub { color: #94a3b8; font-size: .78rem; margin-top: .25rem; }
-
-    /* Badge */
-    .badge {
-        display: inline-block;
-        padding: .22rem .6rem;
-        margin-right: .4rem;
-        margin-bottom: .4rem;
-        border-radius: 999px;
-        background: #1e293b;
-        color: #cbd5e1;
-        font-size: .72rem;
-        font-weight: 500;
-        border: 1px solid #334155;
-    }
-    .badge.hot { background: #7f1d1d; color: #fecaca; border-color: #991b1b; }
+        font-variant-numeric: tabular-nums;
+    }}
+    .kpi .sub {{
+        color: {TEXT_MUTED};
+        font-size: 0.78rem;
+        margin-top: 0.4rem;
+        line-height: 1.4;
+    }}
 
     /* Section divider */
-    .divider {
+    .divider {{
         height: 1px;
-        background: linear-gradient(90deg, transparent, #1e293b, transparent);
+        background: {BORDER};
         margin: 1.5rem 0;
-    }
+    }}
 
-    /* Section headings */
-    h2 { color: #e2e8f0; font-weight: 600; }
-    h3 { color: #cbd5e1; font-weight: 500; }
+    /* Sidebar polish — compact + full-width text */
+    section[data-testid="stSidebar"] {{
+        background: {SURFACE};
+        border-right: 1px solid {BORDER};
+    }}
+    section[data-testid="stSidebar"] .block-container {{
+        padding-top: 1.5rem;
+        padding-right: 1rem;
+        padding-left: 1rem;
+    }}
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] h4 {{
+        color: {TEXT};
+        font-size: 0.72rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        margin: 1.2rem 0 0.5rem 0;
+    }}
 
     /* Links */
-    a { color: #60a5fa; text-decoration: none; }
-    a:hover { color: #93c5fd; text-decoration: underline; }
+    a {{ color: {ACCENT}; text-decoration: none; }}
+    a:hover {{ color: {ACCENT}; text-decoration: underline; }}
 
-    /* Streamlit tweaks */
-    .stTabs [data-baseweb="tab"] {
-        font-size: .95rem;
-        padding: .5rem 1rem;
-    }
-    .stTabs [aria-selected="true"] {
-        color: #60a5fa !important;
-    }
+    /* Tabs — no bold colour on active */
+    .stTabs [data-baseweb="tab-list"] {{
+        gap: 0;
+        border-bottom: 1px solid {BORDER};
+    }}
+    .stTabs [data-baseweb="tab"] {{
+        font-size: 0.88rem;
+        font-weight: 500;
+        padding: 0.6rem 1.1rem;
+        color: {TEXT_MUTED};
+        border-bottom: 2px solid transparent;
+    }}
+    .stTabs [aria-selected="true"] {{
+        color: {TEXT} !important;
+        border-bottom: 2px solid {ACCENT} !important;
+    }}
 
-    /* Table polish */
-    [data-testid="stDataFrame"] { border: 1px solid #1e293b; border-radius: 8px; }
+    /* Dataframes */
+    [data-testid="stDataFrame"] {{
+        border: 1px solid {BORDER};
+    }}
+
+    /* Info/warning boxes — restrained */
+    .stAlert {{
+        border-left: 2px solid {ACCENT_SOFT};
+        background: {SURFACE};
+    }}
 </style>
 """
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------------------
-# Palette
-# ---------------------------------------------------------------------------
-TEAM_A_COLOR = "#DA291C"       # Arsenal red
-TEAM_B_COLOR = "#60a5fa"       # Opposition blue
-NEUTRAL = "#94a3b8"
-ACCENT = "#34d399"
-BG = "#0f172a"
-GRID = "#1e293b"
 
 # ---------------------------------------------------------------------------
 # Data loading (cached)
 # ---------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
 def list_matches() -> list[dict]:
-    """Return matches with a non-trivial metrics.json."""
-    matches = []
+    """Return matches with real pipeline output.
+
+    Filters out thin test runs: a match needs enough players, enough frames,
+    and populated possession data.
+    """
     if not DEMO_OUTPUTS.exists():
-        return matches
+        return []
+    matches: list[dict] = []
     for match_dir in sorted(DEMO_OUTPUTS.iterdir()):
         if not match_dir.is_dir():
             continue
@@ -179,40 +249,43 @@ def list_matches() -> list[dict]:
                 data = json.load(f)
         except Exception:
             continue
-        # Only include matches that have real data
-        if data.get("num_players", 0) < 5:
+        if int(data.get("num_players", 0)) < MIN_PLAYERS:
             continue
+        if int(data.get("frame", 0)) < MIN_FRAMES:
+            continue
+        if REQUIRE_POSSESSION:
+            tpp = data.get("possession", {}).get("team_possession_percentage", {})
+            if not tpp or (float(tpp.get("A", 0)) + float(tpp.get("B", 0))) < 10:
+                continue
         team_names = data.get("team_names", {})
-        display_name = match_dir.name
-        if team_names:
-            a = team_names.get("A", "Team A")
-            b = team_names.get("B", "Team B")
-            display_name = f"{a} vs {b}"
+        a = team_names.get("A", "Team A")
+        b = team_names.get("B", "Team B")
         matches.append({
             "dir": match_dir,
             "name": match_dir.name,
-            "display": display_name,
-            "frames": data.get("frame", 0),
-            "players": data.get("num_players", 0),
+            "display": f"{a} vs {b}",
+            "team_a": a,
+            "team_b": b,
+            "frames": int(data.get("frame", 0)),
+            "players": int(data.get("num_players", 0)),
         })
-    # Sort: arsenal first (richest), then by frames desc
     matches.sort(key=lambda m: (m["name"] != "arsenal", -m["frames"]))
     return matches
 
 
 @st.cache_data(show_spinner=False)
 def load_metrics(match_dir_str: str) -> dict:
-    """Load match metrics JSON."""
     with open(Path(match_dir_str) / "metrics.json") as f:
         return json.load(f)
 
 
 @st.cache_data(show_spinner=False)
 def list_player_heatmaps(match_dir_str: str) -> list[str]:
-    """Return sorted list of player heatmap filenames."""
     match_dir = Path(match_dir_str)
-    files = sorted(match_dir.glob("heatmap_player_*.png"),
-                   key=lambda p: int(p.stem.split("_")[-1]))
+    files = sorted(
+        match_dir.glob("heatmap_player_*.png"),
+        key=lambda p: int(p.stem.split("_")[-1]),
+    )
     return [p.name for p in files]
 
 
@@ -224,16 +297,16 @@ def safe_num(value: Any, default: float = 0.0) -> float:
 
 
 def plotly_dark(fig: go.Figure, height: int | None = None) -> go.Figure:
-    """Apply consistent dark theme to a Plotly figure."""
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor=BG,
         plot_bgcolor=BG,
-        font=dict(color="#cbd5e1", family="Inter, sans-serif"),
-        margin=dict(l=20, r=20, t=40, b=20),
-        xaxis=dict(gridcolor=GRID, zerolinecolor=GRID),
-        yaxis=dict(gridcolor=GRID, zerolinecolor=GRID),
-        legend=dict(bgcolor="rgba(0,0,0,0)"),
+        font=dict(color=TEXT, family="-apple-system, Segoe UI, Inter, sans-serif",
+                  size=12),
+        margin=dict(l=20, r=20, t=40, b=30),
+        xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, linecolor=BORDER),
+        yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER, linecolor=BORDER),
+        legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor=BORDER, borderwidth=0),
     )
     if height:
         fig.update_layout(height=height)
@@ -249,65 +322,138 @@ def kpi(label: str, value: str, sub: str = "") -> None:
     )
 
 
+def team_colour_map(team_a_name: str, team_b_name: str) -> dict:
+    return {
+        team_a_name: TEAM_A,
+        team_b_name: TEAM_B,
+        "Referee": REF,
+        "unknown": NEUTRAL,
+    }
+
+
+def team_name_from_code(code: str, team_a_name: str, team_b_name: str) -> str:
+    if code == "A":
+        return team_a_name
+    if code == "B":
+        return team_b_name
+    if code == "REF":
+        return "Referee"
+    return code or "unknown"
+
+
+def simple_xg(angle_deg: float, distance_px: float, pitch_scale: float = 7.0) -> float:
+    """Lightweight xG proxy.
+
+    This is a transparent, logistic-regression-style approximation using only
+    the two features present in the pre-computed shot events (shot angle to
+    goal and distance to goal). Not a trained model — intended as a plausible
+    difficulty indicator for display purposes.
+
+    Pitch scale (px per metre) is a rough calibration; adjust for your match.
+    """
+    distance_m = max(distance_px / pitch_scale, 1.0)
+    # Narrow angle hurts; distance hurts (inverse); mild intercept.
+    linear = 1.8 - 0.14 * distance_m - 0.025 * (90.0 - min(angle_deg, 90.0))
+    try:
+        return 1.0 / (1.0 + math.exp(-linear))
+    except OverflowError:
+        return 0.0 if linear < 0 else 1.0
+
+
 # ---------------------------------------------------------------------------
-# Sidebar — match selector + credits
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("### ⚽ TactiVision Pro")
-    st.caption("Football Analytics Showcase")
+    st.markdown(
+        f"<div style='font-size:1.15rem;font-weight:600;color:{TEXT};"
+        f"letter-spacing:-0.02em;'>TactiVision Pro</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div style='color:{TEXT_MUTED};font-size:0.82rem;margin-bottom:1rem;'>"
+        f"Football analytics showcase</div>",
+        unsafe_allow_html=True,
+    )
 
     matches = list_matches()
     if not matches:
-        st.error("No pre-computed matches found. Check demo/demo_outputs/.")
+        st.error(
+            "No pre-computed matches with full data found. "
+            "Expected `demo/demo_outputs/arsenal/metrics.json` with populated "
+            "possession, shots, and sprints."
+        )
         st.stop()
 
-    match_names = [m["display"] for m in matches]
-    selected_idx = st.selectbox(
-        "Select match",
-        range(len(matches)),
-        format_func=lambda i: match_names[i],
-        index=0,
-    )
-    selected_match = matches[selected_idx]
-    metrics = load_metrics(str(selected_match["dir"]))
-
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+    if len(matches) == 1:
+        selected_match = matches[0]
+        metrics = load_metrics(str(selected_match["dir"]))
+        st.markdown("#### Match")
+        st.markdown(
+            f"<div style='color:{TEXT};font-weight:500;padding:0.4rem 0;'>"
+            f"{selected_match['display']}</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            f"{selected_match['frames']:,} frames · "
+            f"{selected_match['players']} players"
+        )
+    else:
+        st.markdown("#### Match")
+        selected_idx = st.selectbox(
+            "Select match",
+            range(len(matches)),
+            format_func=lambda i: matches[i]["display"],
+            index=0,
+            label_visibility="collapsed",
+        )
+        selected_match = matches[selected_idx]
+        metrics = load_metrics(str(selected_match["dir"]))
 
     st.markdown("#### About this showcase")
     st.markdown(
-        "This is a **read-only visualisation** of pre-computed results from the "
-        "TactiVision Pro pipeline. The full pipeline (detection, tracking, feature "
-        "extraction) runs locally and requires GPU + ML dependencies."
+        f"<div style='color:{TEXT_MUTED};font-size:0.82rem;line-height:1.5;'>"
+        "A read-only view of pipeline output. The full detection + tracking + "
+        "feature-extraction pipeline requires GPU and runs locally — this page "
+        "serves the pre-computed JSON and heatmap PNGs it wrote."
+        "</div>",
+        unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-
     st.markdown("#### Links")
-    st.markdown(f"[📂 Full source on GitHub]({GITHUB_URL})")
-    st.markdown(f"[💼 Mohanad on LinkedIn]({LINKEDIN_URL})")
+    st.markdown(f"[Full source — GitHub]({GITHUB_URL})")
+    st.markdown(f"[Mohanad Amr — LinkedIn]({LINKEDIN_URL})")
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-    st.caption("Graduation project · 6-person team · MIU 2026")
+    st.markdown(
+        f"<div style='position:absolute;bottom:1rem;color:{TEXT_DIM};"
+        f"font-size:0.7rem;'>Graduation project · MIU 2026</div>",
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
-# Hero
+# Hero banner
 # ---------------------------------------------------------------------------
-team_names = metrics.get("team_names", {})
-TEAM_A_NAME = team_names.get("A", "Team A")
-TEAM_B_NAME = team_names.get("B", "Team B")
+TEAM_A_NAME = selected_match["team_a"]
+TEAM_B_NAME = selected_match["team_b"]
+TEAM_COLOURS = team_colour_map(TEAM_A_NAME, TEAM_B_NAME)
 
 st.markdown(
     f"""
     <div class="hero">
-        <h1>TactiVision Pro — Football Analytics Pipeline</h1>
-        <p class="tag">End-to-end computer vision converting broadcast football video
-        into 70+ tactical features · YOLOv8 · RT-DETR · ByteTrack · Streamlit</p>
-        <div style="margin-top:.8rem">
-            <span class="badge hot">Graduation Project 2026</span>
-            <span class="badge">Team lead · 6 members</span>
-            <span class="badge">Misr International University</span>
-            <span class="badge">Python · PyTorch · OpenCV</span>
+        <h1 class="wordmark">TactiVision Pro</h1>
+        <p class="subtitle">
+            End-to-end computer vision pipeline converting broadcast football
+            video into 70+ tactical features. Built by a six-person team led
+            by Mohanad Amr as the 2026 graduation project at Misr International
+            University.
+        </p>
+        <div class="meta">
+            <span>YOLOv8n</span>
+            <span>RT-DETR</span>
+            <span>ByteTrack</span>
+            <span>PyTorch</span>
+            <span>OpenCV</span>
+            <span>Streamlit</span>
         </div>
     </div>
     """,
@@ -316,34 +462,42 @@ st.markdown(
 
 
 # ---------------------------------------------------------------------------
-# Tabs
+# Tabs — serious, no icons, title case
 # ---------------------------------------------------------------------------
-tabs = st.tabs([
-    "🏠 Overview",
-    "📊 Match Stats",
-    "⚽ Possession",
-    "🥅 Shots",
-    "💨 Physical",
-    "🔥 Heatmaps",
-    "👥 Players",
-    "🏗️ How It Works",
-])
+tab_labels = [
+    "Overview",
+    "Match Summary",
+    "Possession",
+    "Shots",
+    "xG Model",
+    "Physical",
+    "Team Heatmaps",
+    "Player Heatmaps",
+    "Player Tracks",
+    "Pipeline Architecture",
+    "Technical Notes",
+    "About",
+]
+tabs = st.tabs(tab_labels)
+
 
 # ---------------------------------------------------------------------------
-# TAB 1 — Overview / Project pitch
+# TAB — Overview
 # ---------------------------------------------------------------------------
 with tabs[0]:
-    st.markdown("## What is TactiVision Pro?")
+    st.markdown("## Project overview")
     st.markdown(
         f"""
-TactiVision Pro is an end-to-end computer vision pipeline that converts raw
-broadcast football video into **70+ tactical features**: passes, shots, xG, formations,
-pressing, player identities, heatmaps and more.
+TactiVision Pro ingests raw broadcast football footage and outputs a dense set
+of tactical features: player and ball tracking, possession, shots, sprints,
+heatmaps, formation templates, pressing intensity, player identity resolution
+and more. The system was built end-to-end over seven months by a six-person
+engineering team, with Mohanad Amr as lead.
 
-It was built as my graduation project at Misr International University, leading a
-six-person engineering team through 7 months of iteration. This showcase displays
-the pipeline's output on the **{TEAM_A_NAME} vs {TEAM_B_NAME}** match (plus
-other test runs — pick from the sidebar).
+The showcase on this page runs the pipeline's output through a lightweight
+dashboard — the heavy inference pipeline itself (YOLOv8n, RT-DETR, ByteTrack,
+EasyOCR) requires GPU resources and runs locally. The sample match displayed
+here is **{TEAM_A_NAME} vs {TEAM_B_NAME}**, selected from the sidebar.
 """
     )
 
@@ -355,19 +509,17 @@ other test runs — pick from the sidebar).
     with c1:
         st.markdown(
             """
-In broadcast football footage, the ball is:
-- **Small** — a few pixels wide on wide shots
-- **Fast** — hard for frame-by-frame detectors
-- **Occluded** — hidden by players constantly
-- **Blurred** — motion blur on strikes and passes
-- **Off-screen** — the camera doesn't always follow it
+In broadcast football footage the ball is small, fast, frequently occluded,
+blurred by motion and often cropped out of frame. A vanilla object detector
+struggles to produce a usable detection rate.
 
-A vanilla YOLOv8n detector struggles to produce a usable detection rate.
-We built a **dual-model system** that stacks:
+The pipeline stacks three detectors:
 
-1. **YOLOv8n** fine-tuned on custom-annotated football frames
-2. **RT-DETR second-pass** recovery on frames YOLO missed
-3. **Color-based fallback** and short-horizon prediction for occlusion gaps
+1. **YOLOv8n**, fine-tuned on custom-annotated football frames, handles the
+   common case.
+2. **RT-DETR** runs as a second pass specifically on frames YOLO missed.
+3. **Colour and short-horizon prediction** fill the remaining gaps when the
+   ball is occluded or temporarily off-screen.
 """
         )
     with c2:
@@ -378,9 +530,10 @@ We built a **dual-model system** that stacks:
         pred = int(safe_num(bt.get("predicted_detections", 0)))
         rate = safe_num(bt.get("detection_rate", 0)) * 100
 
-        # Stacked bar: breakdown of detection sources on this match
         source_df = pd.DataFrame({
-            "Source": ["YOLOv8n", "Color/HSV fallback", "Short-horizon predict"],
+            "Source": ["YOLOv8n (primary)",
+                       "Colour & HSV fallback",
+                       "Short-horizon predict"],
             "Detections": [yolo, color_d, pred],
         })
         fig = px.bar(
@@ -388,53 +541,52 @@ We built a **dual-model system** that stacks:
             x="Detections",
             y="Source",
             orientation="h",
-            color="Source",
-            color_discrete_map={
-                "YOLOv8n": "#f87171",
-                "Color/HSV fallback": "#60a5fa",
-                "Short-horizon predict": "#34d399",
-            },
+            color_discrete_sequence=[ACCENT],
             text="Detections",
         )
-        fig.update_traces(textposition="outside")
-        fig.update_layout(showlegend=False, title=f"Ball detection breakdown — {selected_match['display']}")
-        st.plotly_chart(plotly_dark(fig, height=320), width='stretch')
+        fig.update_traces(textposition="outside", marker_color=ACCENT)
+        fig.update_layout(
+            showlegend=False,
+            title=f"Ball-detection source breakdown — {selected_match['display']}",
+        )
+        st.plotly_chart(plotly_dark(fig, height=300), width="stretch")
         st.caption(
-            f"Across **{int(safe_num(metrics.get('frame', 0)))} frames**, the dual-model system "
-            f"produced **{total:,} ball detections** (detection rate: **{rate:.1f}%**). "
-            f"YOLO alone contributed {yolo:,}; the fallback and predict passes recovered "
-            f"the remaining {color_d + pred:,}."
+            f"Across {int(safe_num(metrics.get('frame', 0))):,} frames the dual-model "
+            f"pipeline produced {total:,} ball detections (per-frame detection rate "
+            f"{rate:.1f}%). YOLO alone contributed {yolo:,}; the fallback and "
+            f"predict passes recovered the remaining {color_d + pred:,}."
         )
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    st.markdown("### What's in the pipeline")
-    c = st.columns(4)
-    with c[0]:
-        st.markdown("**Detection & tracking**")
-        st.markdown("YOLOv8n · RT-DETR · ByteTrack · ReID module")
-    with c[1]:
-        st.markdown("**Tactical analysis**")
-        st.markdown("Formations (17 templates) · PPDA pressing · Possession zones · xG")
-    with c[2]:
-        st.markdown("**Player identity**")
-        st.markdown("EasyOCR jersey numbers · SQLite roster matching · Team classification")
-    with c[3]:
-        st.markdown("**Outputs**")
-        st.markdown("16-tab dashboard · Heatmaps · PDF reports · Highlight clips")
-
-    st.info(
-        "💡 This showcase runs on free Streamlit Cloud (CPU, 1 GB RAM). "
-        "The full pipeline requires GPU + heavy ML dependencies — "
-        f"run it locally from [the TactiVision repo]({GITHUB_URL}): `streamlit run demo/dashboard_final.py`"
-    )
+    st.markdown("### Pipeline capabilities")
+    cols = st.columns(4)
+    capabilities = [
+        ("Detection & tracking",
+         "YOLOv8n fine-tune · RT-DETR fallback · ByteTrack ID continuity · ReID module"),
+        ("Tactical analysis",
+         "17 formation templates · PPDA pressing · Possession zones · xG estimation"),
+        ("Player identity",
+         "EasyOCR jersey numbers · SQLite roster matching · Team classification"),
+        ("Outputs",
+         "16-tab local dashboard · Positional heatmaps · PDF reports · Highlights"),
+    ]
+    for col, (title, body) in zip(cols, capabilities):
+        with col:
+            st.markdown(
+                f"<div style='color:{TEXT};font-weight:600;font-size:0.95rem;"
+                f"margin-bottom:0.4rem;'>{title}</div>"
+                f"<div style='color:{TEXT_MUTED};font-size:0.82rem;"
+                f"line-height:1.5;'>{body}</div>",
+                unsafe_allow_html=True,
+            )
 
 
 # ---------------------------------------------------------------------------
-# TAB 2 — Match Stats (KPI tiles)
+# TAB — Match Summary
 # ---------------------------------------------------------------------------
 with tabs[1]:
-    st.markdown(f"## {TEAM_A_NAME} vs {TEAM_B_NAME} — Headline Numbers")
+    st.markdown(f"## {TEAM_A_NAME} vs {TEAM_B_NAME} — headline numbers")
 
     bt = metrics.get("ball_tracking", {})
     pos = metrics.get("possession", {})
@@ -444,35 +596,36 @@ with tabs[1]:
 
     row1 = st.columns(4)
     with row1[0]:
-        kpi("Frames tracked", f"{int(safe_num(metrics.get('frame', 0))):,}",
-            f"≈ {safe_num(metrics.get('frame', 0))/25:.1f} s @ 25 FPS")
+        frames = int(safe_num(metrics.get("frame", 0)))
+        kpi("Frames tracked", f"{frames:,}", f"approx. {frames/25:.0f} seconds at 25 FPS")
     with row1[1]:
         kpi("Unique players", f"{int(safe_num(metrics.get('num_players', 0)))}",
-            "incl. referees + both teams")
+            "including both teams and referees")
     with row1[2]:
         kpi("Ball detections", f"{int(safe_num(bt.get('total_detections', 0))):,}",
-            f"detection rate: {safe_num(bt.get('detection_rate', 0))*100:.1f}%")
+            f"per-frame detection rate {safe_num(bt.get('detection_rate', 0))*100:.1f}%")
     with row1[3]:
-        kpi("Possession changes", f"{int(safe_num(pos.get('total_possession_changes', 0)))}",
-            "complete turnovers")
+        kpi("Possession changes",
+            f"{int(safe_num(pos.get('total_possession_changes', 0)))}",
+            "complete turnovers detected")
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
     row2 = st.columns(4)
     with row2[0]:
         kpi(f"{TEAM_A_NAME} possession",
-            f"{safe_num(tpp.get('A', 0)):.1f}%",
+            f"{safe_num(tpp.get('A', 0)):.1f} percent",
             "share of ball-in-play time")
     with row2[1]:
         kpi(f"{TEAM_B_NAME} possession",
-            f"{safe_num(tpp.get('B', 0)):.1f}%",
+            f"{safe_num(tpp.get('B', 0)):.1f} percent",
             "share of ball-in-play time")
     with row2[2]:
         kpi("Shots detected", f"{int(safe_num(shots.get('total_shots', 0)))}",
             "high-velocity ball events near goal")
     with row2[3]:
         kpi("Sprints detected", f"{int(safe_num(sprints.get('total_sprints', 0)))}",
-            f"top speed: {safe_num(sprints.get('top_speed_mps', 0)):.1f} m/s")
+            f"top speed {safe_num(sprints.get('top_speed_mps', 0)):.1f} metres per second")
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
@@ -482,26 +635,23 @@ with tabs[1]:
     with row3[0]:
         kpi("Canonical players",
             f"{int(safe_num(tq.get('canonical_players', 0)))}",
-            "after dedup across tracks")
+            "after cross-track deduplication")
     with row3[1]:
-        kpi("Raw YOLO tracks",
-            f"{int(safe_num(tq.get('raw_yolo_tracks', 0)))}",
-            "before dedup")
+        kpi("Raw YOLO tracks", f"{int(safe_num(tq.get('raw_yolo_tracks', 0)))}",
+            "before deduplication")
     with row3[2]:
-        kpi("Dedup ratio",
-            f"{safe_num(tq.get('dedup_ratio', 0)):.1f}x",
-            "raw → canonical")
+        kpi("Deduplication ratio", f"{safe_num(tq.get('dedup_ratio', 0)):.1f}x",
+            "raw to canonical")
     with row3[3]:
-        kpi("Speed readings",
-            f"{int(safe_num(tq.get('speed_readings_capped', 0))):,}",
-            "velocity samples")
+        kpi("Speed samples", f"{int(safe_num(tq.get('speed_readings_capped', 0))):,}",
+            "frame-to-frame velocity readings")
 
 
 # ---------------------------------------------------------------------------
-# TAB 3 — Possession
+# TAB — Possession
 # ---------------------------------------------------------------------------
 with tabs[2]:
-    st.markdown("## Possession Analysis")
+    st.markdown("## Possession analysis")
     pos = metrics.get("possession", {})
     tpp = pos.get("team_possession_percentage", {})
 
@@ -513,16 +663,21 @@ with tabs[2]:
             st.markdown("### Team possession share")
             pie_df = pd.DataFrame({
                 "Team": [TEAM_A_NAME, TEAM_B_NAME],
-                "Possession": [safe_num(tpp.get("A", 0)), safe_num(tpp.get("B", 0))],
+                "Possession": [safe_num(tpp.get("A", 0)),
+                               safe_num(tpp.get("B", 0))],
             })
-            fig = px.pie(
-                pie_df, values="Possession", names="Team",
-                color="Team",
-                color_discrete_map={TEAM_A_NAME: TEAM_A_COLOR, TEAM_B_NAME: TEAM_B_COLOR},
-                hole=0.55,
-            )
-            fig.update_traces(textinfo="label+percent", textfont_size=14)
-            st.plotly_chart(plotly_dark(fig, height=380), width='stretch')
+            fig = go.Figure(data=[
+                go.Pie(
+                    labels=pie_df["Team"],
+                    values=pie_df["Possession"],
+                    hole=0.6,
+                    marker=dict(colors=[TEAM_A, TEAM_B], line=dict(color=BG, width=2)),
+                    textinfo="label+percent",
+                    textfont=dict(color=TEXT, size=13),
+                )
+            ])
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(plotly_dark(fig, height=360), width="stretch")
 
         with c2:
             st.markdown("### Possession by pitch zone")
@@ -530,76 +685,74 @@ with tabs[2]:
             if zone_stats:
                 zone_rows = []
                 for team_code, zones in zone_stats.items():
-                    team_name = TEAM_A_NAME if team_code == "A" else TEAM_B_NAME
+                    team_name = team_name_from_code(team_code, TEAM_A_NAME, TEAM_B_NAME)
                     for zone, pct in zones.items():
-                        zone_rows.append({
-                            "Team": team_name,
-                            "Zone": zone,
-                            "Pct": safe_num(pct),
-                        })
+                        zone_rows.append({"Team": team_name,
+                                          "Zone": zone,
+                                          "Percent": safe_num(pct)})
                 zone_df = pd.DataFrame(zone_rows)
                 fig = px.bar(
-                    zone_df, x="Zone", y="Pct", color="Team",
+                    zone_df, x="Zone", y="Percent", color="Team",
                     barmode="group",
-                    color_discrete_map={TEAM_A_NAME: TEAM_A_COLOR, TEAM_B_NAME: TEAM_B_COLOR},
-                    labels={"Pct": "% of possession in zone"},
+                    color_discrete_map=TEAM_COLOURS,
+                    labels={"Percent": "Percent of possession in zone"},
                 )
-                st.plotly_chart(plotly_dark(fig, height=380), width='stretch')
+                st.plotly_chart(plotly_dark(fig, height=360), width="stretch")
             else:
                 st.info("No zone-level breakdown available for this match.")
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-        # Duration distribution
         dur = pos.get("duration_stats", {})
         if dur:
             st.markdown("### Possession duration distribution")
             d1, d2, d3, d4 = st.columns(4)
             with d1:
-                kpi("Avg duration", f"{safe_num(dur.get('avg_duration', 0)):.2f}s", "per possession")
+                kpi("Average duration",
+                    f"{safe_num(dur.get('avg_duration', 0)):.2f} s",
+                    "per possession")
             with d2:
-                kpi("Short (<1s)",
-                    f"{safe_num(dur.get('short_pct', 0)):.1f}%",
+                kpi("Short (under 1 s)",
+                    f"{safe_num(dur.get('short_pct', 0)):.1f} %",
                     f"{int(safe_num(dur.get('short_possessions', 0)))} possessions")
             with d3:
-                kpi("Medium (1-5s)",
-                    f"{safe_num(dur.get('medium_pct', 0)):.1f}%",
+                kpi("Medium (1 to 5 s)",
+                    f"{safe_num(dur.get('medium_pct', 0)):.1f} %",
                     f"{int(safe_num(dur.get('medium_possessions', 0)))} possessions")
             with d4:
-                kpi("Long (>5s)",
-                    f"{safe_num(dur.get('long_pct', 0)):.1f}%",
+                kpi("Long (over 5 s)",
+                    f"{safe_num(dur.get('long_pct', 0)):.1f} %",
                     f"{int(safe_num(dur.get('long_possessions', 0)))} possessions")
 
-        # Possession history timeline
         history = pos.get("possession_history", [])
         if history:
             st.markdown("### Possession timeline")
             hist_df = pd.DataFrame(history)
-            if "team" in hist_df.columns and "start_time" in hist_df.columns and "duration" in hist_df.columns:
-                hist_df["team_name"] = hist_df["team"].map(
-                    {"A": TEAM_A_NAME, "B": TEAM_B_NAME, "REF": "Referee"}
-                ).fillna(hist_df["team"])
-                fig = px.bar(
+            if {"team", "start_time", "duration"}.issubset(hist_df.columns):
+                hist_df["team_name"] = hist_df["team"].apply(
+                    lambda c: team_name_from_code(c, TEAM_A_NAME, TEAM_B_NAME))
+                fig = px.scatter(
                     hist_df,
-                    x="start_time", y=[1] * len(hist_df),
+                    x="start_time",
+                    y="team_name",
+                    size="duration",
                     color="team_name",
-                    color_discrete_map={
-                        TEAM_A_NAME: TEAM_A_COLOR,
-                        TEAM_B_NAME: TEAM_B_COLOR,
-                        "Referee": NEUTRAL,
-                    },
-                    hover_data={"duration": ":.2f", "player_id": True, "team_name": True},
-                    labels={"start_time": "Time (seconds)", "y": ""},
+                    color_discrete_map=TEAM_COLOURS,
+                    hover_data={"duration": ":.2f",
+                                "player_id": True,
+                                "team_name": False},
+                    labels={"start_time": "Time (seconds)", "team_name": ""},
                 )
-                fig.update_layout(showlegend=True, yaxis=dict(showticklabels=False))
-                st.plotly_chart(plotly_dark(fig, height=200), width='stretch')
+                fig.update_traces(marker=dict(opacity=0.75, line=dict(width=0)))
+                fig.update_layout(showlegend=False)
+                st.plotly_chart(plotly_dark(fig, height=200), width="stretch")
 
 
 # ---------------------------------------------------------------------------
-# TAB 4 — Shots
+# TAB — Shots
 # ---------------------------------------------------------------------------
 with tabs[3]:
-    st.markdown("## Shot Detection")
+    st.markdown("## Shot detection")
     shot_events = metrics.get("shot_events", [])
     total_shots = int(safe_num(metrics.get("shot_detection", {}).get("total_shots", 0)))
 
@@ -611,76 +764,168 @@ with tabs[3]:
             "ball movements originating in the attacking third."
         )
 
-        # Shot table
         shots_df = pd.DataFrame(shot_events)
-        if "ball_position" in shots_df.columns:
-            shots_df["ball_x"] = shots_df["ball_position"].apply(lambda p: p[0] if isinstance(p, list) and len(p) > 0 else None)
-            shots_df["ball_y"] = shots_df["ball_position"].apply(lambda p: p[1] if isinstance(p, list) and len(p) > 1 else None)
-
-        display_cols = [
-            c for c in ["timestamp", "shooter_id", "shooter_team",
-                        "velocity_mps", "angle_to_goal_deg", "distance_to_goal_px", "frame"]
-            if c in shots_df.columns
-        ]
+        display_cols = [c for c in [
+            "timestamp", "shooter_id", "shooter_team",
+            "velocity_mps", "angle_to_goal_deg", "distance_to_goal_px", "frame",
+        ] if c in shots_df.columns]
         pretty = shots_df[display_cols].copy()
         if "shooter_team" in pretty.columns:
-            pretty["shooter_team"] = pretty["shooter_team"].map(
-                {"A": TEAM_A_NAME, "B": TEAM_B_NAME, "REF": "Referee"}
-            ).fillna(pretty["shooter_team"])
+            pretty["shooter_team"] = pretty["shooter_team"].apply(
+                lambda c: team_name_from_code(c, TEAM_A_NAME, TEAM_B_NAME))
 
         pretty = pretty.rename(columns={
             "timestamp": "Time (s)",
             "shooter_id": "Player ID",
             "shooter_team": "Team",
             "velocity_mps": "Ball velocity (m/s)",
-            "angle_to_goal_deg": "Angle to goal (°)",
+            "angle_to_goal_deg": "Angle to goal (deg)",
             "distance_to_goal_px": "Distance to goal (px)",
             "frame": "Frame",
         })
 
-        st.dataframe(pretty.style.format({
-            "Time (s)": "{:.2f}",
-            "Ball velocity (m/s)": "{:.1f}",
-            "Angle to goal (°)": "{:.1f}",
-            "Distance to goal (px)": "{:.0f}",
-        }), width='stretch', hide_index=True)
+        st.dataframe(
+            pretty.style.format({
+                "Time (s)": "{:.2f}",
+                "Ball velocity (m/s)": "{:.1f}",
+                "Angle to goal (deg)": "{:.1f}",
+                "Distance to goal (px)": "{:.0f}",
+            }),
+            width="stretch",
+            hide_index=True,
+        )
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-        # Shot velocity vs angle scatter
-        if "ball_velocity_mps" in shots_df.columns or "velocity_mps" in shots_df.columns:
-            vel_col = "velocity_mps" if "velocity_mps" in shots_df.columns else "ball_velocity_mps"
-            if vel_col in shots_df.columns and "angle_to_goal_deg" in shots_df.columns:
-                st.markdown("### Shot characteristics")
-                scatter_df = shots_df.copy()
-                scatter_df["team_name"] = scatter_df["shooter_team"].map(
-                    {"A": TEAM_A_NAME, "B": TEAM_B_NAME, "REF": "Referee"}
-                ).fillna(scatter_df["shooter_team"])
-                fig = px.scatter(
-                    scatter_df,
-                    x="angle_to_goal_deg",
-                    y=vel_col,
-                    color="team_name",
-                    size="distance_to_goal_px",
-                    hover_data=["shooter_id", "timestamp"],
-                    color_discrete_map={
-                        TEAM_A_NAME: TEAM_A_COLOR,
-                        TEAM_B_NAME: TEAM_B_COLOR,
-                        "Referee": NEUTRAL,
-                    },
-                    labels={
-                        "angle_to_goal_deg": "Angle to goal (degrees)",
-                        vel_col: "Ball velocity (m/s)",
-                    },
-                )
-                st.plotly_chart(plotly_dark(fig, height=400), width='stretch')
+        if {"velocity_mps", "angle_to_goal_deg"}.issubset(shots_df.columns):
+            st.markdown("### Shot characteristics")
+            scatter_df = shots_df.copy()
+            scatter_df["team_name"] = scatter_df["shooter_team"].apply(
+                lambda c: team_name_from_code(c, TEAM_A_NAME, TEAM_B_NAME))
+            fig = px.scatter(
+                scatter_df,
+                x="angle_to_goal_deg",
+                y="velocity_mps",
+                color="team_name",
+                size="distance_to_goal_px",
+                hover_data=["shooter_id", "timestamp"],
+                color_discrete_map=TEAM_COLOURS,
+                labels={
+                    "angle_to_goal_deg": "Angle to goal (degrees)",
+                    "velocity_mps": "Ball velocity (metres per second)",
+                },
+            )
+            st.plotly_chart(plotly_dark(fig, height=400), width="stretch")
 
 
 # ---------------------------------------------------------------------------
-# TAB 5 — Physical / Sprints
+# TAB — xG Model
 # ---------------------------------------------------------------------------
 with tabs[4]:
-    st.markdown("## Physical & Sprint Analysis")
+    st.markdown("## Expected goals (xG)")
+    shot_events = metrics.get("shot_events", [])
+
+    st.markdown(
+        """
+A transparent xG estimate computed from the shot angle to goal and distance to
+goal that the pipeline recorded for each shot event. This is **not a trained
+production model** — it is a two-feature logistic approximation intended to
+indicate shot difficulty.
+
+The full pipeline includes a trained xG model (see `services/xg_calculator.py`
+in the repository). This showcase uses a simplified version so you can see how
+the two inputs combine without requiring the trained weights.
+"""
+    )
+
+    if not shot_events:
+        st.info("No shot events detected in this match's pipeline run.")
+    else:
+        xg_df = pd.DataFrame(shot_events).copy()
+        xg_df["team_name"] = xg_df["shooter_team"].apply(
+            lambda c: team_name_from_code(c, TEAM_A_NAME, TEAM_B_NAME))
+        xg_df["xG"] = xg_df.apply(
+            lambda r: simple_xg(
+                safe_num(r.get("angle_to_goal_deg", 0)),
+                safe_num(r.get("distance_to_goal_px", 0)),
+            ),
+            axis=1,
+        )
+
+        c1, c2 = st.columns([2, 3])
+        with c1:
+            st.markdown("### xG totals by team")
+            agg = (xg_df.groupby("team_name")
+                        .agg(shots=("xG", "size"), total_xG=("xG", "sum"))
+                        .reset_index())
+            fig = px.bar(
+                agg, x="team_name", y="total_xG",
+                color="team_name",
+                color_discrete_map=TEAM_COLOURS,
+                text=agg["total_xG"].round(2),
+                labels={"team_name": "Team", "total_xG": "Total xG"},
+            )
+            fig.update_traces(textposition="outside")
+            fig.update_layout(showlegend=False)
+            st.plotly_chart(plotly_dark(fig, height=320), width="stretch")
+
+        with c2:
+            st.markdown("### Shot quality distribution")
+            fig = px.scatter(
+                xg_df,
+                x="distance_to_goal_px",
+                y="angle_to_goal_deg",
+                size="xG",
+                color="team_name",
+                color_discrete_map=TEAM_COLOURS,
+                hover_data={"xG": ":.3f",
+                            "velocity_mps": ":.1f",
+                            "timestamp": ":.1f",
+                            "team_name": False},
+                labels={
+                    "distance_to_goal_px": "Distance to goal (pixels)",
+                    "angle_to_goal_deg": "Angle to goal (degrees)",
+                },
+            )
+            st.plotly_chart(plotly_dark(fig, height=320), width="stretch")
+
+        st.markdown("### Per-shot xG table")
+        pretty = xg_df[["timestamp", "team_name", "shooter_id",
+                        "angle_to_goal_deg", "distance_to_goal_px",
+                        "velocity_mps", "xG"]].copy()
+        pretty = pretty.rename(columns={
+            "timestamp": "Time (s)",
+            "team_name": "Team",
+            "shooter_id": "Player ID",
+            "angle_to_goal_deg": "Angle (deg)",
+            "distance_to_goal_px": "Distance (px)",
+            "velocity_mps": "Velocity (m/s)",
+            "xG": "xG",
+        })
+        st.dataframe(
+            pretty.style.format({
+                "Time (s)": "{:.2f}",
+                "Angle (deg)": "{:.1f}",
+                "Distance (px)": "{:.0f}",
+                "Velocity (m/s)": "{:.1f}",
+                "xG": "{:.3f}",
+            }),
+            width="stretch",
+            hide_index=True,
+        )
+
+        st.caption(
+            "xG approximation: 1 / (1 + exp(-(1.8 - 0.14 x distance_m - "
+            "0.025 x (90 - angle_deg)))). Distance in metres using a 7 px/m "
+            "calibration, angle clamped to [0, 90]."
+        )
+
+
+# ---------------------------------------------------------------------------
+# TAB — Physical
+# ---------------------------------------------------------------------------
+with tabs[5]:
+    st.markdown("## Physical and sprint analysis")
     sprint_events = metrics.get("sprint_events", [])
     sprint_summary = metrics.get("sprint_detection", {})
 
@@ -689,156 +934,163 @@ with tabs[4]:
     else:
         c = st.columns(4)
         with c[0]:
-            kpi("Sprints", f"{int(safe_num(sprint_summary.get('total_sprints', 0)))}",
+            kpi("Sprints",
+                f"{int(safe_num(sprint_summary.get('total_sprints', 0)))}",
                 "across all players")
         with c[1]:
-            kpi("High-intensity",
+            kpi("High intensity",
                 f"{int(safe_num(sprint_summary.get('high_intensity_sprints', 0)))}",
-                "qualifying as high-intensity")
+                "qualifying under the threshold")
         with c[2]:
-            kpi("Top speed",
-                f"{safe_num(sprint_summary.get('top_speed_mps', 0)):.1f} m/s",
-                f"≈ {safe_num(sprint_summary.get('top_speed_mps', 0))*3.6:.1f} km/h")
+            top_mps = safe_num(sprint_summary.get("top_speed_mps", 0))
+            kpi("Top speed", f"{top_mps:.1f} m/s",
+                f"approx. {top_mps*3.6:.1f} km/h")
         with c[3]:
-            kpi("Avg max speed",
+            kpi("Average max speed",
                 f"{safe_num(sprint_summary.get('avg_max_speed_mps', 0)):.1f} m/s",
-                "across sprints")
+                "mean across sprint events")
 
         st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
         sprint_df = pd.DataFrame(sprint_events)
-        sprint_df["team_name"] = sprint_df["team"].map(
-            {"A": TEAM_A_NAME, "B": TEAM_B_NAME, "REF": "Referee"}
-        ).fillna(sprint_df["team"])
+        sprint_df["team_name"] = sprint_df["team"].apply(
+            lambda c: team_name_from_code(c, TEAM_A_NAME, TEAM_B_NAME))
 
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("### Sprint top-speed distribution")
             fig = px.histogram(
                 sprint_df, x="max_speed_mps", color="team_name",
-                color_discrete_map={
-                    TEAM_A_NAME: TEAM_A_COLOR,
-                    TEAM_B_NAME: TEAM_B_COLOR,
-                    "Referee": NEUTRAL,
-                },
+                color_discrete_map=TEAM_COLOURS,
                 nbins=20,
-                labels={"max_speed_mps": "Max sprint speed (m/s)"},
+                labels={"max_speed_mps": "Maximum sprint speed (metres per second)"},
             )
-            st.plotly_chart(plotly_dark(fig, height=360), width='stretch')
+            fig.update_layout(barmode="overlay")
+            fig.update_traces(opacity=0.75)
+            st.plotly_chart(plotly_dark(fig, height=320), width="stretch")
 
         with c2:
             st.markdown("### Sprint duration distribution")
             fig = px.histogram(
                 sprint_df, x="duration_sec", color="team_name",
-                color_discrete_map={
-                    TEAM_A_NAME: TEAM_A_COLOR,
-                    TEAM_B_NAME: TEAM_B_COLOR,
-                    "Referee": NEUTRAL,
-                },
+                color_discrete_map=TEAM_COLOURS,
                 nbins=20,
                 labels={"duration_sec": "Sprint duration (seconds)"},
             )
-            st.plotly_chart(plotly_dark(fig, height=360), width='stretch')
+            fig.update_layout(barmode="overlay")
+            fig.update_traces(opacity=0.75)
+            st.plotly_chart(plotly_dark(fig, height=320), width="stretch")
 
         st.markdown("### Top sprinters")
         top_sprints = sprint_df.sort_values("max_speed_mps", ascending=False).head(10)
         display = top_sprints[["player_id", "team_name", "duration_sec",
-                               "max_speed_mps", "avg_speed_mps", "is_high_intensity"]].copy()
+                               "max_speed_mps", "avg_speed_mps",
+                               "is_high_intensity"]].copy()
         display = display.rename(columns={
             "player_id": "Player",
             "team_name": "Team",
             "duration_sec": "Duration (s)",
             "max_speed_mps": "Max speed (m/s)",
-            "avg_speed_mps": "Avg speed (m/s)",
+            "avg_speed_mps": "Average speed (m/s)",
             "is_high_intensity": "High intensity",
         })
-        st.dataframe(display.style.format({
-            "Duration (s)": "{:.2f}",
-            "Max speed (m/s)": "{:.2f}",
-            "Avg speed (m/s)": "{:.2f}",
-        }), width='stretch', hide_index=True)
+        st.dataframe(
+            display.style.format({
+                "Duration (s)": "{:.2f}",
+                "Max speed (m/s)": "{:.2f}",
+                "Average speed (m/s)": "{:.2f}",
+            }),
+            width="stretch",
+            hide_index=True,
+        )
 
 
 # ---------------------------------------------------------------------------
-# TAB 6 — Heatmaps
+# TAB — Team Heatmaps
 # ---------------------------------------------------------------------------
-with tabs[5]:
-    st.markdown("## Positional Heatmaps")
+with tabs[6]:
+    st.markdown("## Team and global heatmaps")
     st.markdown(
-        "Generated by the pipeline from frame-by-frame player positions, projected "
-        "onto a normalised pitch coordinate system."
+        f"Generated by the pipeline from frame-by-frame player positions, "
+        f"projected onto a normalised pitch coordinate system."
     )
 
     match_dir = selected_match["dir"]
-
-    # Team / global heatmaps
-    st.markdown("### Team-level & global")
     team_cols = st.columns(3)
-    for col, (name, filename) in zip(
-        team_cols,
-        [
-            (f"{TEAM_A_NAME} (Team A)", "heatmap_team_A.png"),
-            (f"{TEAM_B_NAME} (Team B)", "heatmap_team_B.png"),
-            ("Global (all players)", "heatmap_global.png"),
-        ],
-    ):
+    team_heatmap_list = [
+        (f"{TEAM_A_NAME}", "heatmap_team_A.png"),
+        (f"{TEAM_B_NAME}", "heatmap_team_B.png"),
+        ("Global (all players)", "heatmap_global.png"),
+    ]
+    for col, (name, filename) in zip(team_cols, team_heatmap_list):
         img_path = match_dir / filename
         with col:
-            st.markdown(f"**{name}**")
+            st.markdown(
+                f"<div style='color:{TEXT};font-weight:600;font-size:0.95rem;"
+                f"margin-bottom:0.5rem;'>{name}</div>",
+                unsafe_allow_html=True,
+            )
             if img_path.exists():
-                st.image(str(img_path), width='stretch')
+                st.image(str(img_path), width="stretch")
             else:
                 st.info(f"Not available: {filename}")
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    # Per-player heatmap browser
-    st.markdown("### Per-player heatmap")
+# ---------------------------------------------------------------------------
+# TAB — Player Heatmaps
+# ---------------------------------------------------------------------------
+with tabs[7]:
+    st.markdown("## Per-player heatmap browser")
+    st.markdown(
+        f"Positional density for each tracked player, drawn from the full "
+        f"frame set the pipeline analysed."
+    )
+
+    match_dir = selected_match["dir"]
     player_files = list_player_heatmaps(str(match_dir))
+
     if not player_files:
         st.info("No per-player heatmaps for this match.")
     else:
-        player_ids = [f.replace("heatmap_player_", "").replace(".png", "") for f in player_files]
+        player_ids = [f.replace("heatmap_player_", "").replace(".png", "")
+                      for f in player_files]
         c1, c2 = st.columns([1, 2])
         with c1:
             selected_pid = st.selectbox(
-                f"Pick a player ID ({len(player_ids)} available)",
+                f"Player ID ({len(player_ids)} tracked)",
                 options=player_ids,
                 index=0,
             )
-            # Try to pull identity info
             identities = metrics.get("player_identities", {})
             identity = identities.get(selected_pid, {})
             team = identity.get("team", "unknown")
             display = identity.get("display", f"Player {selected_pid}")
             jersey = identity.get("number")
-            team_name_map = {"A": TEAM_A_NAME, "B": TEAM_B_NAME, "REF": "Referee"}
-            team_label = team_name_map.get(team, team)
-            st.markdown(f"**Display:** {display}")
+            team_label = team_name_from_code(team, TEAM_A_NAME, TEAM_B_NAME)
+            st.markdown(f"**Display name:** {display}")
             st.markdown(f"**Team:** {team_label}")
             if jersey:
-                st.markdown(f"**Jersey #:** {jersey}")
+                st.markdown(f"**Jersey number:** {jersey}")
         with c2:
             img_path = match_dir / f"heatmap_player_{selected_pid}.png"
             if img_path.exists():
-                st.image(str(img_path), width='stretch')
+                st.image(str(img_path), width="stretch")
             else:
                 st.warning("Heatmap file missing.")
 
 
 # ---------------------------------------------------------------------------
-# TAB 7 — Players
+# TAB — Player Tracks
 # ---------------------------------------------------------------------------
-with tabs[6]:
-    st.markdown("## Player Tracking Summary")
+with tabs[8]:
+    st.markdown("## Player tracks and workload")
     tracks = metrics.get("tracks", [])
     if not tracks:
         st.info("No per-player track data in this match's metrics.")
     else:
         tracks_df = pd.DataFrame(tracks)
-        tracks_df["team_name"] = tracks_df["team"].map(
-            {"A": TEAM_A_NAME, "B": TEAM_B_NAME, "REF": "Referee"}
-        ).fillna(tracks_df["team"].fillna("unknown"))
+        tracks_df["team_name"] = tracks_df["team"].apply(
+            lambda c: team_name_from_code(c or "unknown", TEAM_A_NAME, TEAM_B_NAME))
 
         c1, c2 = st.columns([2, 1])
         with c1:
@@ -849,17 +1101,21 @@ with tabs[6]:
             )
         with c2:
             min_distance = st.number_input(
-                "Min distance (m)", min_value=0.0, value=50.0, step=10.0
+                "Minimum distance (m)", min_value=0.0, value=50.0, step=10.0
             )
 
         filtered = tracks_df[
             tracks_df["team_name"].isin(team_filter)
             & (tracks_df.get("total_distance_m", 0) >= min_distance)
-        ]
+        ].copy()
 
-        st.markdown(f"Showing **{len(filtered)}** of {len(tracks_df)} tracked players")
+        st.markdown(
+            f"<div style='color:{TEXT_MUTED};font-size:0.85rem;'>"
+            f"Showing <strong>{len(filtered)}</strong> of {len(tracks_df)} "
+            f"tracked players</div>",
+            unsafe_allow_html=True,
+        )
 
-        # Top distance / speed chart
         if not filtered.empty and "total_distance_m" in filtered.columns:
             top20 = filtered.nlargest(20, "total_distance_m")
             fig = px.bar(
@@ -868,23 +1124,15 @@ with tabs[6]:
                 y="display_name",
                 color="team_name",
                 orientation="h",
-                color_discrete_map={
-                    TEAM_A_NAME: TEAM_A_COLOR,
-                    TEAM_B_NAME: TEAM_B_COLOR,
-                    "Referee": NEUTRAL,
-                    "unknown": "#475569",
-                },
+                color_discrete_map=TEAM_COLOURS,
                 hover_data=["player_id", "avg_speed_mps", "max_speed_mps"],
-                labels={
-                    "total_distance_m": "Total distance (m)",
-                    "display_name": "Player",
-                },
+                labels={"total_distance_m": "Total distance (metres)",
+                        "display_name": "Player"},
                 title="Top 20 by distance covered",
             )
             fig.update_layout(yaxis=dict(categoryorder="total ascending"))
-            st.plotly_chart(plotly_dark(fig, height=500), width='stretch')
+            st.plotly_chart(plotly_dark(fig, height=500), width="stretch")
 
-        # Table
         display_cols = [c for c in [
             "player_id", "display_name", "team_name", "jersey_number",
             "total_distance_m", "avg_speed_mps", "max_speed_mps",
@@ -896,56 +1144,72 @@ with tabs[6]:
             "team_name": "Team",
             "jersey_number": "Jersey",
             "total_distance_m": "Distance (m)",
-            "avg_speed_mps": "Avg speed (m/s)",
+            "avg_speed_mps": "Average speed (m/s)",
             "max_speed_mps": "Max speed (m/s)",
             "workload_score": "Workload",
             "involvement_index": "Involvement",
         })
-        st.dataframe(pretty.style.format({
-            "Distance (m)": "{:.1f}",
-            "Avg speed (m/s)": "{:.2f}",
-            "Max speed (m/s)": "{:.2f}",
-            "Workload": "{:.1f}",
-            "Involvement": "{:.2f}",
-        }), width='stretch', hide_index=True, height=400)
+        st.dataframe(
+            pretty.style.format({
+                "Distance (m)": "{:.1f}",
+                "Average speed (m/s)": "{:.2f}",
+                "Max speed (m/s)": "{:.2f}",
+                "Workload": "{:.1f}",
+                "Involvement": "{:.2f}",
+            }),
+            width="stretch",
+            hide_index=True,
+            height=420,
+        )
 
 
 # ---------------------------------------------------------------------------
-# TAB 8 — How It Works
+# TAB — Pipeline Architecture
 # ---------------------------------------------------------------------------
-with tabs[7]:
-    st.markdown("## How TactiVision Pro works")
+with tabs[9]:
+    st.markdown("## Pipeline architecture")
+    st.markdown(
+        """
+Broadcast video is processed frame by frame through a staged pipeline. Each
+stage emits structured output that the next stage consumes, with intermediate
+results persisted to JSON for the dashboard layer to render.
+"""
+    )
 
     st.markdown(
         """
-### The pipeline
 ```
 Broadcast video (mp4)
-        │
-        ▼
-┌──────────────────────┐
-│  Frame extraction    │  OpenCV
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│  YOLOv8n detection   │  Primary: players + ball
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│  RT-DETR second pass │  Ball recovery on YOLO-miss frames
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│  ByteTrack           │  Identity continuity across frames
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│  Feature extractors  │  70+ tactical features
-└──────────┬───────────┘
-           ▼
-┌──────────────────────┐
-│  Streamlit dashboard │  16 interactive tabs (local)
-└──────────────────────┘
+        |
+        v
++----------------------+
+|  Frame extraction    |  OpenCV
++----------------------+
+        |
+        v
++----------------------+
+|  YOLOv8n detection   |  Primary: players + ball
++----------------------+
+        |
+        v
++----------------------+
+|  RT-DETR second pass |  Ball recovery on YOLO-miss frames
++----------------------+
+        |
+        v
++----------------------+
+|  ByteTrack           |  Identity continuity across frames
++----------------------+
+        |
+        v
++----------------------+
+|  Feature extractors  |  70+ tactical features
++----------------------+
+        |
+        v
++----------------------+
+|  Streamlit dashboard |  16 interactive tabs (local)
++----------------------+
 ```
 """
     )
@@ -954,85 +1218,128 @@ Broadcast video (mp4)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("### Tech stack")
+        st.markdown("### Component stack")
         st.markdown(
             """
 - **Language:** Python 3.10+
 - **Deep learning:** PyTorch, Ultralytics (YOLOv8), RT-DETR
-- **Tracking:** ByteTrack (with BoT-SORT comparison baseline)
+- **Tracking:** ByteTrack (with BoT-SORT as baseline comparison)
 - **Computer vision:** OpenCV
-- **OCR (jersey numbers):** EasyOCR
-- **Dashboard:** Streamlit + Plotly
-- **Data:** SQLite (roster matching), pandas, NumPy
+- **OCR for jersey numbers:** EasyOCR
+- **Dashboard:** Streamlit, Plotly
+- **Data layer:** SQLite (roster matching), pandas, NumPy
 - **Analytics:** SciPy, scikit-learn
 """
         )
-
     with c2:
-        st.markdown("### What the full dashboard includes")
+        st.markdown("### Full dashboard scope")
         st.markdown(
             """
-The local `demo/dashboard_final.py` has **16 tabs**:
-- Overview · Shooting · Passing · Physical · Tactical
-- xG & Analytics · Heatmaps · Highlights
-- Database · Settings · AI Recommendations
-- Player Performance · Match Comparison
-- Live Match Data · Generate Report · Roster Management
+The local `demo/dashboard_final.py` runs sixteen interactive tabs covering:
 
-This public showcase focuses on the subset that can run on free Streamlit Cloud
-without GPU or heavy ML dependencies.
+- Overview, Shooting, Passing, Physical, Tactical
+- xG and advanced analytics, Heatmaps, Highlights
+- Database integration, Settings, AI recommendations
+- Player performance, Match comparison
+- Live match data, Report generation, Roster management
+
+This public showcase focuses on the subset that can run on free Streamlit
+Cloud without GPU or heavy ML dependencies.
 """
         )
 
-    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    st.markdown("### Why this showcase is read-only")
+# ---------------------------------------------------------------------------
+# TAB — Technical Notes
+# ---------------------------------------------------------------------------
+with tabs[10]:
+    st.markdown("## Why this showcase is read-only")
     st.markdown(
         """
-Running the full pipeline requires:
-- **GPU-accelerated inference** (YOLOv8 + RT-DETR on broadcast video is CPU-slow)
-- **Multi-GB ML dependencies** (PyTorch, TensorFlow, Ultralytics, OpenCV-contrib)
-- **1-5 GB match video files**
-- **~1-2 GB RAM per concurrent user**
+The full pipeline requires:
 
-None of those fit on a free Streamlit Cloud instance. This showcase instead
-visualises the **pre-computed JSON output** that the pipeline wrote after
-analysing matches locally. Everything you see here is the real algorithm's output
-on real broadcast footage — just loaded from disk instead of re-computed on each page view.
+- GPU-accelerated inference (YOLOv8n and RT-DETR are prohibitively slow on CPU
+  for broadcast-length video)
+- Multi-gigabyte ML dependencies (PyTorch, TensorFlow, Ultralytics,
+  OpenCV-contrib, EasyOCR)
+- One- to five-gigabyte input video files
+- Roughly one to two gigabytes of RAM per concurrent user
 
-**To run the full pipeline yourself:**
+None of this fits inside a free Streamlit Community Cloud instance. The
+showcase therefore serves the pre-computed JSON and heatmap PNGs that the
+pipeline wrote after running on broadcast footage locally. Everything you see
+is the real algorithm's output on real footage — just loaded from disk rather
+than recomputed on each page view.
+
+### Running the full pipeline locally
 """
     )
     st.code(
         f"""git clone {GITHUB_URL}.git
 cd TactiVision
-pip install -r requirements.txt
+pip install -r requirements_full.txt
 streamlit run demo/dashboard_final.py""",
         language="bash",
     )
 
     st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
 
-    st.markdown("### The team")
+    st.markdown("### Resource profile for this showcase")
+    rc1, rc2, rc3 = st.columns(3)
+    with rc1:
+        kpi("Memory used", "approx. 300 MB", "well under the 1 GB free-tier cap")
+    with rc2:
+        kpi("Cold-start time", "15 to 25 s", "first request after idle")
+    with rc3:
+        kpi("Payload", "approx. 7 MB", "pre-computed heatmap PNGs")
+
+
+# ---------------------------------------------------------------------------
+# TAB — About
+# ---------------------------------------------------------------------------
+with tabs[11]:
+    st.markdown("## About the project and team")
     st.markdown(
         """
-Built by a six-person engineering team as the graduation project for the
-BSc Data Science programme at **Misr International University (MIU)**, 2026.
+TactiVision Pro was built as the graduation project for the BSc Data Science
+programme at **Misr International University (MIU)**, class of 2026. The
+system was developed over seven months by a six-person engineering team.
 
-- **Mohanad Amr** — Team lead, ML/CV engineer, dashboard architecture
-- **5 co-engineers** — detection, tracking, analytics, PDF reporting, QA
+### Team composition
 
-For questions or collaboration, reach out:
+- **Mohanad Amr** — team lead, ML and CV engineer, dashboard architecture
+- **Five co-engineers** across detection, tracking, analytics, reporting,
+  identity resolution, and QA
+
+### Contact
 """
     )
     st.markdown(f"- GitHub: [MohanadddAmrr]({GITHUB_URL})")
     st.markdown(f"- LinkedIn: [Mohanad Amr]({LINKEDIN_URL})")
 
+    st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
+
+    st.markdown("### Acknowledgements")
+    st.markdown(
+        """
+Thanks to the TactiVision engineering team for seven months of focused work,
+and to the Data Science faculty at Misr International University for
+supervising the project. External libraries and tools used in the pipeline
+include Ultralytics YOLOv8, RT-DETR, ByteTrack, EasyOCR, OpenCV, PyTorch,
+Streamlit, Plotly, and pandas.
+"""
+    )
+
+
 # ---------------------------------------------------------------------------
 # Footer
 # ---------------------------------------------------------------------------
 st.markdown('<div class="divider"></div>', unsafe_allow_html=True)
-st.caption(
-    f"TactiVision Pro · Showcase build · Data: {selected_match['display']} · "
-    f"[Source on GitHub]({GITHUB_URL})"
+st.markdown(
+    f"<div style='color:{TEXT_DIM};font-size:0.78rem;text-align:center;"
+    f"padding:0.5rem 0;'>"
+    f"TactiVision Pro showcase &middot; data: {selected_match['display']} &middot; "
+    f"<a href='{GITHUB_URL}' style='color:{TEXT_DIM};'>Source on GitHub</a>"
+    f"</div>",
+    unsafe_allow_html=True,
 )
