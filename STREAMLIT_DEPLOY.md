@@ -12,15 +12,22 @@ at the repo root) to [Streamlit Community Cloud](https://share.streamlit.io).
 ## What's included
 
 - **`streamlit_app.py`** — the showcase entry point (loaded by Streamlit Cloud by convention)
-- **`requirements_streamlit.txt`** — slim dependency set (no torch / tensorflow / ultralytics)
+- **`requirements.txt`** — slim deps for the showcase (streamlit, pandas, plotly, pillow)
+- **`requirements_full.txt`** — heavy deps for running the FULL pipeline locally (torch, tensorflow, ultralytics, opencv-contrib, easyocr…)
 - **`.streamlit/config.toml`** — dark theme matching the project's visual language
 - Pre-computed match data at `demo/demo_outputs/arsenal/` is served as-is
 
+### Why two requirements files?
+
+Streamlit Community Cloud auto-detects `requirements.txt` at repo root and installs it on every deploy. If we put the heavy ML dependencies there, every deploy would fail (torch alone is 2+ GB — exceeds the 1 GB memory cap). So the slim showcase deps are in `requirements.txt`, and the full-pipeline deps live in `requirements_full.txt`.
+
+To install the full pipeline locally: `pip install -r requirements_full.txt`.
+
 ## Deploy in 3 clicks
 
-### 1. Go to Streamlit Cloud and start a new app
+### 1. Go to Streamlit Cloud
 
-Open https://share.streamlit.io and click **"New app"**.
+Open https://share.streamlit.io and click **"Create app"** → **"Deploy a public app from GitHub"**.
 
 ### 2. Configure the deployment
 
@@ -29,7 +36,7 @@ Fill in:
 | Field | Value |
 |---|---|
 | **Repository** | `MohanadddAmrr/TactiVision` |
-| **Branch** | `main` (merge this PR first) |
+| **Branch** | `master` ⚠️ (NOT `main` — the empty-initial-commit `main` has no code) |
 | **Main file path** | `streamlit_app.py` |
 | **App URL** (custom subdomain) | `tactivision` (or any available slug) |
 
@@ -37,13 +44,9 @@ Click **"Advanced settings"** and set:
 
 | Field | Value |
 |---|---|
-| **Python version** | `3.11` |
-| **Requirements file** | `requirements_streamlit.txt` |
+| **Python version** | `3.11` ⚠️ **(NOT 3.14 — it's too new, half the packages don't have wheels for it yet)** |
 
-> If "Requirements file" is not visible in the UI, Streamlit Cloud will
-> auto-detect `requirements.txt` first. In that case, after deployment,
-> go to **Settings → Secrets** and add `requirements_file = "requirements_streamlit.txt"`,
-> or temporarily rename the full `requirements.txt` on the deployment branch.
+Leave Secrets blank.
 
 ### 3. Click Deploy and wait
 
@@ -54,7 +57,7 @@ Your final URL will look like:  `https://tactivision.streamlit.app`
 
 ## Updating the showcase
 
-Every push to `main` (or whichever branch you deployed) automatically triggers
+Every push to `master` (or whichever branch you deployed) automatically triggers
 a redeploy. You never need to touch the Streamlit Cloud dashboard again.
 
 ## Resource budget
@@ -67,10 +70,11 @@ a redeploy. You never need to touch the Streamlit Cloud dashboard again.
 
 ### "ModuleNotFoundError" after deploy
 
-Streamlit Cloud picked up the wrong `requirements.txt`. Check:
-- Advanced settings → "Requirements file" is set to `requirements_streamlit.txt`
-- OR rename the top-level `requirements.txt` → `requirements_full.txt` so the
-  slim file becomes the default
+Streamlit Cloud's auto-detected `requirements.txt` should be the slim showcase file (not the full-pipeline one). Verify:
+- `requirements.txt` at the repo root is ~5 lines (streamlit, pandas, numpy, plotly, Pillow)
+- `requirements_full.txt` is the long heavy file
+
+If they're swapped, rename them.
 
 ### App shows "No pre-computed matches found"
 
@@ -80,8 +84,8 @@ locally. If not, add it with `git add -f demo/demo_outputs/arsenal/*`.
 
 ### Deploy times out at `pip install`
 
-Something in `requirements_streamlit.txt` is pulling heavy transitive deps.
-Pin versions tighter or check `pip-tools` output.
+- Python version is set too new (3.14 won't compile numpy/pandas yet). Set to **3.11**.
+- Or a dependency pin is wrong — check logs for the exact failing package.
 
 ### Changes don't appear after push
 
@@ -93,8 +97,8 @@ Streamlit Cloud sometimes caches. Force a reboot:
 ```
 tactivision/
 ├── streamlit_app.py           # Showcase entry point (what Streamlit Cloud runs)
-├── requirements_streamlit.txt # Slim deps for the showcase
-├── requirements.txt           # Full-pipeline deps (local use only)
+├── requirements.txt           # Slim deps for Streamlit Cloud showcase
+├── requirements_full.txt      # Full-pipeline deps (local use only, has torch etc)
 ├── .streamlit/
 │   └── config.toml            # Theme + runtime config
 ├── demo/
